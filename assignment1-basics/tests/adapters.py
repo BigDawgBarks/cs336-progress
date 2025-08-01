@@ -9,7 +9,6 @@ import numpy.typing as npt
 import torch
 from torch import Tensor
 
-# from ..cs336_basics.bpe_tokenizer import train_bpe
 from cs336_basics.bpe_tokenizer import train_bpe
 
 
