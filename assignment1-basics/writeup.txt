@@ -1,0 +1,51 @@
+1. [unicode1]
+(a) What Unicode character does chr(0) return?
+Deliverable: A one-sentence response.
+(b) How does this character’s string representation (__repr__()) differ from its printed representation?
+Deliverable: A one-sentence response.
+(c) What happens when this character occurs in text? It may be helpful to play around with the
+following in your Python interpreter and see if it matches your expectations:
+>>> chr(0)
+>>> print(chr(0))
+>>> "this is a test" + chr(0) + "string"
+>>> print("this is a test" + chr(0) + "string")
+Deliverable: A one-sentence response.
+
+Answers:
+(a) chr(0) returns unicode character '\0' or NUL (the null byte).
+(b) The __repr__() of chr(0) is '\x00', making it unambiguous to the reader,
+whereas __str__() of the same character is an empty space, which is more in
+line with what it represents in text but more easily confused with other
+characters such as whitespaces and newlines.
+(c) The results from the above ('\x00', <empty>, this is a test\x00string, this
+is a teststring) largely match my expectations but differ in a few important
+ways: I did not expect printing vs entering into the console the same string to
+result in different renderings of the NUL character, but this is a reasonable
+and self-consistent behavior for the interpreter upon further thought.
+
+2. [unicode2]
+(a) What are some reasons to prefer training our tokenizer on UTF-8 encoded bytes, rather than
+UTF-16 or UTF-32? It may be helpful to compare the output of these encodings for various
+input strings.
+Deliverable: A one-to-two sentence response.
+(b) Consider the following (incorrect) function, which is intended to decode a UTF-8 byte string into
+a Unicode string. Why is this function incorrect? Provide an example of an input byte string
+that yields incorrect results.
+def decode_utf8_bytes_to_str_wrong(bytestring: bytes):
+return "".join([bytes([b]).decode("utf-8") for b in bytestring])
+>>> decode_utf8_bytes_to_str_wrong("hello".encode("utf-8"))
+'hello'
+Deliverable: An example input byte string for which decode_utf8_bytes_to_str_wrong produces incorrect output, with a one-sentence explanation of why the function is incorrect.
+(c) Give a two byte sequence that does not decode to any Unicode character(s).
+Deliverable: An example, with a one-sentence explanation.
+
+Answers:
+(a) Two advantages of UTF-8 over UTF-16 and UTF-32 are that UTF-8 encodes ASCII
+characters as themselves, making it more readable, and that UTF-16/32 require
+require more padding because they use larger words, and thus present as longer
+byte sequences than UTF-8.
+(b) This function is incorrect because it decodes each byte individually, but
+Unicode characters may be more than one byte long. "hello! こんにちは!" is one
+character sequence for which this would fail.
+(c) 0xC0 0x80 cannot be decoded to unicode characters because 0xC0 implies a 
+two-character length, but the data bits encode \0, which sholud be one byte.
