@@ -96,13 +96,17 @@ def count_chunk_pairs(chunk, pair_to_merge: Merge):
                         new_tokens_sequence.extend(tokens_sequence[:i])
                     new_tokens_sequence.append(new_token)
                     if i > 0:
-                        left_pair = (tokens_sequence[i - 1], new_token)
-                        count_by_token_pair[left_pair] += pretoken_count
-                        pretokens_by_token_pair[left_pair].add(pretoken)
+                        old_left_pair = (tokens_sequence[i - 1], tokens_sequence[i])
+                        new_left_pair = (tokens_sequence[i - 1], new_token)
+                        count_by_token_pair[new_left_pair] += pretoken_count
+                        count_by_token_pair[old_left_pair] -= pretoken_count
+                        pretokens_by_token_pair[new_left_pair].add(pretoken)
                     if i < len(tokens_sequence) - 2:
-                        right_pair = (new_token, tokens_sequence[i + 1])
-                        count_by_token_pair[right_pair] += pretoken_count
-                        pretokens_by_token_pair[right_pair].add(pretoken) 
+                        old_right_pair = (tokens_sequence[i], tokens_sequence[i + 1])
+                        new_right_pair = (new_token, tokens_sequence[i + 1])
+                        count_by_token_pair[new_right_pair] += pretoken_count
+                        count_by_token_pair[old_right_pair] -= pretoken_count
+                        pretokens_by_token_pair[new_right_pair].add(pretoken) 
                     i += 2
                 else:
                     if found:
