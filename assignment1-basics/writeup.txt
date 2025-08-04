@@ -54,5 +54,13 @@ two-character length, but the data bits encode \0, which sholud be one byte.
 
 4. [train_bpe_tinystories] 
 Plan:
-1. 
+1. Fix Traceback (most recent call last):
+  File "/home/rylnaldo/Code/cs336/assignment1-basics/cs336_basics/bpe_tokenizer.py", line 172, in <module>
+    f.write(f"{token}: {vocab[token].decode('utf-8')}\n")
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 0: invalid start byte
+
+2. Fix the issue where trainer silently crashes on train set -> get to tqdm step with train set
+
+3. [Mnly] optimize based on profiler output until under 2 minutes on train set
 
