@@ -49,3 +49,8 @@ Unicode characters may be more than one byte long. "hello! こんにちは!" is 
 character sequence for which this would fail.
 (c) 0xC0 0x80 cannot be decoded to unicode characters because 0xC0 implies a 
 two-character length, but the data bits encode \0, which sholud be one byte.
+
+3. [train_bpe] Passes all tests.
+
+4. [train_bpe_tinystories] 
+
