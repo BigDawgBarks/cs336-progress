@@ -136,7 +136,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     merges = []
     num_merges_needed = vocab_size - len(vocab)
     
-    for i in range(num_merges_needed):
+    for i in tqdm(range(num_merges_needed), desc="Merges", total=num_merges_needed):
         pair_stats = get_pair_stats(word_freqs_symbols)
         if not pair_stats:
             break
@@ -163,8 +163,9 @@ def _process_chunk(chunk_text: str) -> Counter:
 if __name__ == "__main__":
     with profile_block("foo"):
         vocab, merges = train_bpe(
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
-                vocab_size=52000,
+                # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
+                vocab_size=10000,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
