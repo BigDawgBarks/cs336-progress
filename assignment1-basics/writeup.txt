@@ -53,4 +53,6 @@ two-character length, but the data bits encode \0, which sholud be one byte.
 3. [train_bpe] Passes all tests.
 
 4. [train_bpe_tinystories] 
+Plan:
+1. 
 
