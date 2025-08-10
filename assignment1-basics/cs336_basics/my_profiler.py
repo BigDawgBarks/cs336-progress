@@ -29,7 +29,7 @@ def profile_block(name="Code block"):
         
         print(f"\n--- CPU Profile (Top 10) ---")
         s = io.StringIO()
-        ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
+        ps = pstats.Stats(profiler, stream=s).sort_stats('tottime')#('cumulative')
         ps.print_stats(10)
         print(s.getvalue())
 

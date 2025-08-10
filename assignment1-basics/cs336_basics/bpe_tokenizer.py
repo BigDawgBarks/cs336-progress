@@ -13,7 +13,7 @@ import regex
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-MAX_BYTES_PER_READ = 200_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
+MAX_BYTES_PER_READ = 10_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
 
 
 class Merge:
@@ -87,6 +87,10 @@ def merge_symbols(best_pair, word_freqs):
     p1, p2 = best_pair
     new_symbol = p1 + p2
     for symbols, freq in word_freqs.items():
+        if p1 not in symbols or p2 not in symbols:
+            new_word_freqs[symbols] = freq
+            continue
+
         new_symbols = []
         i = 0
         while i < len(symbols):
@@ -121,7 +125,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     bytes_processed = 0
     total_word_freqs_str = Counter()
     total_file_size = get_file_size(input_path)
-    with tqdm(total=total_file_size, desc="Reading file", unit="B", unit_scale=True) as pbar:
+    with tqdm(total=total_file_size, desc="Read", unit="B", unit_scale=True) as pbar:
         with mp.Pool(processes=get_num_workers()) as pool:
             while True:
                 with open(input_path, "r", encoding="utf-8") as f:
