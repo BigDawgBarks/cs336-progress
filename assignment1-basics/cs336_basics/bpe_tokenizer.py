@@ -75,7 +75,7 @@ def get_chunk_boundaries(num_items):
 
 
 def get_pair_stats(word_freqs):
-    pair_freqs = Counter()
+    pair_freqs = defaultdict(int)
     for symbols, freq in word_freqs.items():
         for i in range(len(symbols) - 1):
             pair_freqs[symbols[i], symbols[i+1]] += freq
@@ -193,7 +193,7 @@ if __name__ == "__main__":
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
                 input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
-                vocab_size=1000,
+                vocab_size=10000,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
