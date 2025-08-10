@@ -13,6 +13,7 @@ import regex
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+MAX_BYTES_PER_READ = 200_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
 
 
 class Merge:
@@ -24,7 +25,7 @@ class Merge:
 
 def get_num_workers():
     """Returns the number of CPU cores on the device."""
-    return os.cpu_count()
+    return os.cpu_count() or 1
 
 
 def get_optimal_num_chunks():
@@ -99,6 +100,13 @@ def merge_symbols(best_pair, word_freqs):
     return new_word_freqs
 
 
+def get_file_size(input_path):
+    with open(input_path, 'rb') as f:
+        f.seek(0, 2)
+        total_file_size = f.tell()
+    return total_file_size
+
+
 def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -110,25 +118,41 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
         if token_str.encode("utf-8") not in vocab.values():
             vocab[len(vocab)] = token_str.encode("utf-8")
 
-    with open(input_path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    text_chunks = [text]
-    if special_tokens:
-        special_pattern = f"({'|'.join(map(regex.escape, special_tokens))})"
-        text_chunks = regex.split(special_pattern, text)
-        text_chunks = [chunk for chunk in text_chunks if chunk]
-
-    num_processes = os.cpu_count() or 1
-    with mp.Pool(processes=num_processes) as pool:
-        non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
-        if non_special_chunks:
-            chunk_freqs_list = pool.map(_process_chunk, non_special_chunks)
-            total_word_freqs_str = Counter()
-            for freqs in chunk_freqs_list:
-                total_word_freqs_str.update(freqs)
-        else:
-            total_word_freqs_str = Counter()
+    bytes_processed = 0
+    total_word_freqs_str = Counter()
+    total_file_size = get_file_size(input_path)
+    with tqdm(total=total_file_size, desc="Reading file", unit="B", unit_scale=True) as pbar:
+        with mp.Pool(processes=get_num_workers()) as pool:
+            while True:
+                with open(input_path, "r", encoding="utf-8") as f:
+                    f.seek(bytes_processed)
+                    text = f.read(MAX_BYTES_PER_READ)
+        
+                if not text:
+                    break
+            
+                text_chunks = [text]
+                if special_tokens:
+                    special_pattern = f"({'|'.join(map(regex.escape, special_tokens))})"
+                    text_chunks = regex.split(special_pattern, text)
+                    text_chunks = [chunk for chunk in text_chunks if chunk]
+        
+                # Discard the last chunk if not at EOF to avoid boundary issues.
+                # We assume here that there will never be MAX_BYTES between special tokens.
+                text_bytes = len(text.encode("utf-8"))
+                if text_bytes < MAX_BYTES_PER_READ or len(text_chunks) <= 1:
+                    bytes_processed += text_bytes
+                    pbar.update(text_bytes)
+                else:
+                    last_chunk = text_chunks.pop()
+                    bytes_processed += text_bytes - len(last_chunk)
+                    pbar.update(text_bytes - len(last_chunk))
+            
+                non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
+                if non_special_chunks:
+                    chunk_freqs_list = pool.map(_process_chunk, non_special_chunks)
+                    for freqs in chunk_freqs_list:
+                        total_word_freqs_str.update(freqs)
 
     word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
     word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
@@ -164,12 +188,16 @@ if __name__ == "__main__":
     with profile_block("foo"):
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
-                vocab_size=10000,
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
+                vocab_size=1000,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
-                f.write(f"{token}: {vocab[token].decode('utf-8')}\n")
+                try:
+                    decoded = vocab[token].decode('utf-8')
+                except UnicodeDecodeError:
+                    decoded = repr(vocab[token])
+                f.write(f"{token}: {decoded}\n")
         with open('./out/merges.txt', 'w') as f:
             for m1, m2 in merges:
                 f.write(f"Merge {m1}, {m2}\n")
