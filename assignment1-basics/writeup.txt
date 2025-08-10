@@ -53,14 +53,24 @@ two-character length, but the data bits encode \0, which sholud be one byte.
 3. [train_bpe] Passes all tests.
 
 4. [train_bpe_tinystories] 
-Plan:
-1. Fix Traceback (most recent call last):
-  File "/home/rylnaldo/Code/cs336/assignment1-basics/cs336_basics/bpe_tokenizer.py", line 172, in <module>
-    f.write(f"{token}: {vocab[token].decode('utf-8')}\n")
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 0: invalid start byte
+(a) Train a byte-level BPE tokenizer on the TinyStories dataset, using a maximum vocabulary size
+of 10,000. Make sure to add the TinyStories <|endoftext|> special token to the vocabulary.
+Serialize the resulting vocabulary and merges to disk for further inspection. How many hours
+and memory did training take? What is the longest token in the vocabulary? Does it make sense?
+Resource requirements: ≤ 30 minutes (no GPUs), ≤ 30GB RAM
+Hint You should be able to get under 2 minutes for BPE training using multiprocessing during
+pretokenization and the following two facts:
+(a) The <|endoftext|> token delimits documents in the data files.
+(b) The <|endoftext|> token is handled as a special case before the BPE merges are applied.
+Deliverable: A one-to-two sentence response.
+(b) Profile your code. What part of the tokenizer training process takes the most time?
+Deliverable: A one-to-two sentence response.
 
-2. Fix the issue where trainer silently crashes on train set -> get to tqdm step with train set
-
-3. [Mnly] optimize based on profiler output until under 2 minutes on train set
-
+Answers:
+(a) The training took 8 minutes and 9 seconds in total, including 1 minute and
+39 seconds for pretokenization and 6 minutes 30 seconds for merging tokens. The
+longest vocabulary item is ' responsibility', which seems within reason for a
+vocabulary size of 10k tokens.
+(b) The most expensive part of training was calculating the token pair
+frequencies (get_pair_stats), which took 272.584 seconds of cumulative time
+inclusive of subroutines and 249.618 seconds not inclusive of subroutines.
