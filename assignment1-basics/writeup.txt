@@ -74,3 +74,6 @@ vocabulary size of 10k tokens.
 (b) The most expensive part of training was calculating the token pair
 frequencies (get_pair_stats), which took 272.584 seconds of cumulative time
 inclusive of subroutines and 249.618 seconds not inclusive of subroutines.
+
+5. [train_bpe_expts_owt]
+
