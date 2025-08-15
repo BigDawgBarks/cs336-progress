@@ -150,14 +150,14 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
                 if not text:
                     break
             
+                chunk_start_pos = bytes_processed
+                
                 text_chunks = [text]
                 if special_tokens:
                     special_pattern = f"({'|'.join(map(regex.escape, special_tokens))})"
                     text_chunks = regex.split(special_pattern, text)
                     text_chunks = [chunk for chunk in text_chunks if chunk]
         
-                # Discard the last chunk if not at EOF to avoid boundary issues.
-                # We assume here that there will never be MAX_BYTES between special tokens.
                 text_bytes = len(text.encode("utf-8"))
                 if text_bytes < MAX_BYTES_PER_READ or len(text_chunks) <= 1:
                     bytes_processed += text_bytes
@@ -169,7 +169,15 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
             
                 non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
                 if non_special_chunks:
-                    chunk_freqs_list = pool.map(_process_chunk, non_special_chunks)
+                    chunk_args = []
+                    current_offset = 0
+                    for chunk in text_chunks:
+                        chunk_bytes = len(chunk.encode("utf-8"))
+                        if chunk not in special_tokens:
+                            chunk_args.append((input_path, chunk_start_pos + current_offset, chunk_bytes))
+                        current_offset += chunk_bytes
+                    
+                    chunk_freqs_list = pool.map(_process_file_chunk, chunk_args)
                     for freqs in chunk_freqs_list:
                         total_word_freqs_str.update(freqs)
 
@@ -198,9 +206,14 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     return vocab, merges
 
 
-def _process_chunk(chunk_text: str) -> Counter:
+def _process_file_chunk(args) -> Counter:
+    file_path, start_byte, num_bytes = args
     compiled_pat = regex.compile(PRETOKENIZATION_PATTERN)
     freqs = Counter()
+    with open(file_path, 'rb') as f:
+        f.seek(start_byte)
+        chunk_bytes = f.read(num_bytes)
+        chunk_text = chunk_bytes.decode('utf-8')
     for match in compiled_pat.finditer(chunk_text):
         freqs[match.group(0)] += 1
     return freqs
@@ -211,8 +224,8 @@ if __name__ == "__main__":
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_valid.txt",
-                vocab_size=500,
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
+                vocab_size=10,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
