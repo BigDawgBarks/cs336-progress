@@ -68,15 +68,33 @@ def get_pair_stats(word_freqs, pool=None):
     return final_pair_freqs
 
 
-def merge_symbols(best_pair, word_freqs):
-    new_word_freqs = {}
+def build_pair_to_symbols_mapping(word_freqs_symbols):
+    pair_to_symbols = defaultdict(set)
+    for symbols in word_freqs_symbols:
+        for i in range(len(symbols) - 1):
+            pair = (symbols[i], symbols[i+1])
+            pair_to_symbols[pair].add(symbols)
+    return pair_to_symbols
+
+
+def merge_symbols(best_pair, word_freqs, pair_to_symbols_mapping):
     p1, p2 = best_pair
     new_symbol = p1 + p2
-    for symbols, freq in word_freqs.items():
-        if p1 not in symbols or p2 not in symbols:
-            new_word_freqs[symbols] = freq
+    
+    candidate_symbols = pair_to_symbols_mapping.get(best_pair, set())
+    
+    to_remove = []
+    to_add = []
+    
+    for symbols in candidate_symbols:
+        if symbols not in word_freqs:
             continue
-
+        
+        freq = word_freqs[symbols]
+        
+        if p1 not in symbols or p2 not in symbols:
+            continue
+        
         new_symbols = []
         i = 0
         while i < len(symbols):
@@ -86,8 +104,19 @@ def merge_symbols(best_pair, word_freqs):
             else:
                 new_symbols.append(symbols[i])
                 i += 1
-        new_word_freqs[tuple(new_symbols)] = freq
-    return new_word_freqs
+        
+        new_symbols_tuple = tuple(new_symbols)
+        to_remove.append(symbols)
+        to_add.append((new_symbols_tuple, freq))
+        
+        for i in range(len(new_symbols) - 1):
+            pair = (new_symbols[i], new_symbols[i+1])
+            pair_to_symbols_mapping[pair].add(new_symbols_tuple)
+    
+    for symbols in to_remove:
+        del word_freqs[symbols]
+    for symbols, freq in to_add:
+        word_freqs[symbols] = freq
 
 
 def get_file_size(input_path):
@@ -150,6 +179,8 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     merges = []
     num_merges_needed = vocab_size - len(vocab)
     
+    pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)
+    
     with mp.Pool(processes=get_num_workers()) as pool:
         for i in tqdm(range(num_merges_needed), desc="Merges", total=num_merges_needed):
             pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
@@ -162,7 +193,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
             new_token_id = len(vocab)
             vocab[new_token_id] = best_pair[0] + best_pair[1]
     
-            word_freqs_symbols = merge_symbols(best_pair, word_freqs_symbols)
+            merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping)
 
     return vocab, merges
 
