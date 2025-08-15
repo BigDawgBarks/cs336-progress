@@ -14,7 +14,7 @@ import heapq
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-MAX_BYTES_PER_READ = 10_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
+MAX_BYTES_PER_READ = 512_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
 MIN_CHUNK_SIZE = 10_000
 
 
@@ -77,7 +77,7 @@ def build_pair_to_symbols_mapping(word_freqs_symbols):
     return pair_to_symbols
 
 
-def merge_symbols(best_pair, word_freqs, pair_to_symbols_mapping):
+def merge_symbols(best_pair, word_freqs, pair_to_symbols_mapping, pair_stats):
     p1, p2 = best_pair
     new_symbol = p1 + p2
     
@@ -95,6 +95,12 @@ def merge_symbols(best_pair, word_freqs, pair_to_symbols_mapping):
         if p1 not in symbols or p2 not in symbols:
             continue
         
+        for i in range(len(symbols) - 1):
+            old_pair = (symbols[i], symbols[i+1])
+            pair_stats[old_pair] -= freq
+            if pair_stats[old_pair] <= 0:
+                del pair_stats[old_pair]
+        
         new_symbols = []
         i = 0
         while i < len(symbols):
@@ -108,6 +114,10 @@ def merge_symbols(best_pair, word_freqs, pair_to_symbols_mapping):
         new_symbols_tuple = tuple(new_symbols)
         to_remove.append(symbols)
         to_add.append((new_symbols_tuple, freq))
+        
+        for i in range(len(new_symbols) - 1):
+            new_pair = (new_symbols[i], new_symbols[i+1])
+            pair_stats[new_pair] = pair_stats.get(new_pair, 0) + freq
         
         for i in range(len(new_symbols) - 1):
             pair = (new_symbols[i], new_symbols[i+1])
@@ -181,27 +191,29 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
                     for freqs in chunk_freqs_list:
                         total_word_freqs_str.update(freqs)
 
-    word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
-    word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
+        word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
+        word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
+
+        pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)
+        
+        print("Building initial pair statistics...")
+        pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
+        print("Done building initial pair statistics.")
 
     merges = []
     num_merges_needed = vocab_size - len(vocab)
     
-    pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)
-    
-    with mp.Pool(processes=get_num_workers()) as pool:
-        for i in tqdm(range(num_merges_needed), desc="Merges", total=num_merges_needed):
-            pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
-            if not pair_stats:
-                break
-    
-            best_pair = max(pair_stats, key=lambda p: (pair_stats[p], p))
-            
-            merges.append(best_pair)
-            new_token_id = len(vocab)
-            vocab[new_token_id] = best_pair[0] + best_pair[1]
-    
-            merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping)
+    for i in tqdm(range(num_merges_needed), desc="Merges", total=num_merges_needed):
+        if not pair_stats:
+            break
+
+        best_pair = max(pair_stats, key=lambda p: (pair_stats[p], p))
+        
+        merges.append(best_pair)
+        new_token_id = len(vocab)
+        vocab[new_token_id] = best_pair[0] + best_pair[1]
+
+        merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping, pair_stats)
 
     return vocab, merges
 
@@ -224,8 +236,8 @@ if __name__ == "__main__":
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
-                vocab_size=10,
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_valid.txt",
+                vocab_size=1000,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
