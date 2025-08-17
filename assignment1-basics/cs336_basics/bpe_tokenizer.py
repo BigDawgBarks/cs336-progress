@@ -14,7 +14,7 @@ import heapq
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-MAX_BYTES_PER_READ = 512_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
+MAX_BYTES_PER_READ = 50_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
 MIN_CHUNK_SIZE = 10_000
 
 
@@ -236,8 +236,8 @@ if __name__ == "__main__":
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_valid.txt",
-                vocab_size=1000,
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
+                vocab_size=32_000,
                 special_tokens=["<|endoftext|>"])
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
