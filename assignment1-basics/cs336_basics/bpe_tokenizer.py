@@ -190,15 +190,13 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
                     chunk_freqs_list = pool.map(_process_file_chunk, chunk_args)
                     for freqs in chunk_freqs_list:
                         total_word_freqs_str.update(freqs)
+            print("Building initial pair statistics...")
+            word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
+            word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
+            pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
+            pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)        
+            print("Done building initial pair statistics.")
 
-        word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
-        word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
-
-        pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)
-        
-        print("Building initial pair statistics...")
-        pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
-        print("Done building initial pair statistics.")
 
     merges = []
     num_merges_needed = vocab_size - len(vocab)
