@@ -16,6 +16,7 @@ import heapq
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 MAX_BYTES_PER_READ = 50_000_000 # each byte seems to take 10x overhead; aim for 2GiB per read at most.
 MIN_CHUNK_SIZE = 10_000
+CHUNKS_PER_BATCH = 300
 
 
 def get_num_workers():
@@ -179,17 +180,23 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
             
                 non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
                 if non_special_chunks:
-                    chunk_args = []
+                    chunk_infos = []
                     current_offset = 0
                     for chunk in text_chunks:
                         chunk_bytes = len(chunk.encode("utf-8"))
                         if chunk not in special_tokens:
-                            chunk_args.append((input_path, chunk_start_pos + current_offset, chunk_bytes))
+                            chunk_infos.append((chunk_start_pos + current_offset, chunk_bytes))
                         current_offset += chunk_bytes
                     
-                    chunk_freqs_list = pool.map(_process_file_chunk, chunk_args)
+                    batch_args = []
+                    for i in range(0, len(chunk_infos), CHUNKS_PER_BATCH):
+                        batch = chunk_infos[i:i + CHUNKS_PER_BATCH]
+                        batch_args.append((input_path, batch))
+
+                    chunk_freqs_list = pool.map(_process_file_chunk_batch, batch_args)
                     for freqs in chunk_freqs_list:
                         total_word_freqs_str.update(freqs)
+
             print("Building initial pair statistics...")
             word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
             word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
@@ -216,16 +223,19 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
     return vocab, merges
 
 
-def _process_file_chunk(args) -> Counter:
-    file_path, start_byte, num_bytes = args
+def _process_file_chunk_batch(args) -> Counter:
+    file_path, chunk_infos = args
     compiled_pat = regex.compile(PRETOKENIZATION_PATTERN)
     freqs = Counter()
+
     with open(file_path, 'rb') as f:
-        f.seek(start_byte)
-        chunk_bytes = f.read(num_bytes)
-        chunk_text = chunk_bytes.decode('utf-8')
-    for match in compiled_pat.finditer(chunk_text):
-        freqs[match.group(0)] += 1
+        for start_byte, num_bytes in chunk_infos:
+            f.seek(start_byte)
+            chunk_bytes = f.read(num_bytes)
+            chunk_text = chunk_bytes.decode('utf-8')
+            for match in compiled_pat.finditer(chunk_text):
+                freqs[match.group(0)] += 1
+
     return freqs
 
 
