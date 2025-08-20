@@ -8,9 +8,11 @@ from tqdm import tqdm
 
 import multiprocessing as mp
 import os
+import pickle
 import re
 import regex
 import heapq
+import tempfile
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -137,78 +139,128 @@ def get_file_size(input_path):
     return total_file_size
 
 
-def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+def save_checkpoint(checkpoint_path, merge_index, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping):
+    checkpoint_data = {
+        'merge_index': merge_index,
+        'vocab': vocab,
+        'merges': merges,
+        'word_freqs_symbols': word_freqs_symbols,
+        'pair_stats': pair_stats,
+        'pair_to_symbols_mapping': pair_to_symbols_mapping
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='wb', delete=False, dir=os.path.dirname(checkpoint_path)) as tmp_file:
+        pickle.dump(checkpoint_data, tmp_file)
+        tmp_file.flush()
+        os.fsync(tmp_file.fileno())
+        temp_path = tmp_file.name
+    
+    os.rename(temp_path, checkpoint_path)
+
+
+def load_checkpoint(checkpoint_path):
+    if not os.path.exists(checkpoint_path):
+        return None
+    
+    with open(checkpoint_path, 'rb') as f:
+        checkpoint_data = pickle.load(f)
+    
+    return (
+        checkpoint_data['merge_index'],
+        checkpoint_data['vocab'],
+        checkpoint_data['merges'],
+        checkpoint_data['word_freqs_symbols'],
+        checkpoint_data['pair_stats'],
+        checkpoint_data['pair_to_symbols_mapping']
+    )
+
+
+def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], checkpoint_path: str = None, checkpoint_frequency: int = 1000) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
     if vocab_size < 256:
         raise ValueError("Vocabulary size must be at least 256.")
 
-    vocab = {i: bytes([i]) for i in range(256)}
-    for token_str in special_tokens:
-        if token_str.encode("utf-8") not in vocab.values():
-            vocab[len(vocab)] = token_str.encode("utf-8")
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint_data = load_checkpoint(checkpoint_path)
+        if checkpoint_data:
+            start_merge_index, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping = checkpoint_data
+            print(f"Resuming from merge {start_merge_index}")
+        else:
+            start_merge_index = 0
+            vocab = {i: bytes([i]) for i in range(256)}
+            for token_str in special_tokens:
+                if token_str.encode("utf-8") not in vocab.values():
+                    vocab[len(vocab)] = token_str.encode("utf-8")
+    else:
+        start_merge_index = 0
+        vocab = {i: bytes([i]) for i in range(256)}
+        for token_str in special_tokens:
+            if token_str.encode("utf-8") not in vocab.values():
+                vocab[len(vocab)] = token_str.encode("utf-8")
 
-    bytes_processed = 0
-    total_word_freqs_str = Counter()
-    total_file_size = get_file_size(input_path)
-    with tqdm(total=total_file_size, desc="Read", unit="B", unit_scale=True) as pbar:
-        with mp.Pool(processes=get_num_workers()) as pool:
-            while True:
-                with open(input_path, "r", encoding="utf-8") as f:
-                    f.seek(bytes_processed)
-                    text = f.read(MAX_BYTES_PER_READ)
-        
-                if not text:
-                    break
+    if start_merge_index == 0:
+        bytes_processed = 0
+        total_word_freqs_str = Counter()
+        total_file_size = get_file_size(input_path)
+        with tqdm(total=total_file_size, desc="Read", unit="B", unit_scale=True) as pbar:
+            with mp.Pool(processes=get_num_workers()) as pool:
+                while True:
+                    with open(input_path, "r", encoding="utf-8") as f:
+                        f.seek(bytes_processed)
+                        text = f.read(MAX_BYTES_PER_READ)
             
-                chunk_start_pos = bytes_processed
+                    if not text:
+                        break
                 
-                text_chunks = [text]
-                if special_tokens:
-                    special_pattern = f"({'|'.join(map(regex.escape, special_tokens))})"
-                    text_chunks = regex.split(special_pattern, text)
-                    text_chunks = [chunk for chunk in text_chunks if chunk]
-        
-                text_bytes = len(text.encode("utf-8"))
-                if text_bytes < MAX_BYTES_PER_READ or len(text_chunks) <= 1:
-                    bytes_processed += text_bytes
-                    pbar.update(text_bytes)
-                else:
-                    last_chunk = text_chunks.pop()
-                    bytes_processed += text_bytes - len(last_chunk.encode("utf-8"))
-                    pbar.update(text_bytes - len(last_chunk.encode("utf-8")))
-            
-                non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
-                if non_special_chunks:
-                    chunk_infos = []
-                    current_offset = 0
-                    for chunk in text_chunks:
-                        chunk_bytes = len(chunk.encode("utf-8"))
-                        if chunk not in special_tokens:
-                            chunk_infos.append((chunk_start_pos + current_offset, chunk_bytes))
-                        current_offset += chunk_bytes
+                    chunk_start_pos = bytes_processed
                     
-                    batch_args = []
-                    for i in range(0, len(chunk_infos), CHUNKS_PER_BATCH):
-                        batch = chunk_infos[i:i + CHUNKS_PER_BATCH]
-                        batch_args.append((input_path, batch))
+                    text_chunks = [text]
+                    if special_tokens:
+                        special_pattern = f"({'|'.join(map(regex.escape, special_tokens))})"
+                        text_chunks = regex.split(special_pattern, text)
+                        text_chunks = [chunk for chunk in text_chunks if chunk]
+            
+                    text_bytes = len(text.encode("utf-8"))
+                    if text_bytes < MAX_BYTES_PER_READ or len(text_chunks) <= 1:
+                        bytes_processed += text_bytes
+                        pbar.update(text_bytes)
+                    else:
+                        last_chunk = text_chunks.pop()
+                        bytes_processed += text_bytes - len(last_chunk.encode("utf-8"))
+                        pbar.update(text_bytes - len(last_chunk.encode("utf-8")))
+                
+                    non_special_chunks = [chunk for chunk in text_chunks if chunk not in special_tokens]
+                    if non_special_chunks:
+                        chunk_infos = []
+                        current_offset = 0
+                        for chunk in text_chunks:
+                            chunk_bytes = len(chunk.encode("utf-8"))
+                            if chunk not in special_tokens:
+                                chunk_infos.append((chunk_start_pos + current_offset, chunk_bytes))
+                            current_offset += chunk_bytes
+                        
+                        batch_args = []
+                        for i in range(0, len(chunk_infos), CHUNKS_PER_BATCH):
+                            batch = chunk_infos[i:i + CHUNKS_PER_BATCH]
+                            batch_args.append((input_path, batch))
 
-                    chunk_freqs_list = pool.map(_process_file_chunk_batch, batch_args)
-                    for freqs in chunk_freqs_list:
-                        total_word_freqs_str.update(freqs)
+                        chunk_freqs_list = pool.map(_process_file_chunk_batch, batch_args)
+                        for freqs in chunk_freqs_list:
+                            total_word_freqs_str.update(freqs)
 
-            print("Building initial pair statistics...")
-            word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
-            word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
-            pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
-            pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)        
-            print("Done building initial pair statistics.")
+                print("Building initial pair statistics...")
+                word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
+                word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
+                pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
+                pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)        
+                print("Done building initial pair statistics.")
+                merges = []
 
-
-    merges = []
     num_merges_needed = vocab_size - len(vocab)
     
-    for i in tqdm(range(num_merges_needed), desc="Merges", total=num_merges_needed):
+    for i in tqdm(range(start_merge_index, num_merges_needed), desc="Merges", total=num_merges_needed, initial=start_merge_index):
         if not pair_stats:
             break
 
@@ -219,6 +271,14 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
         vocab[new_token_id] = best_pair[0] + best_pair[1]
 
         merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping, pair_stats)
+        
+        if checkpoint_path and (i + 1) % checkpoint_frequency == 0:
+            save_checkpoint(checkpoint_path, i + 1, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
+            print(f"Checkpoint saved at merge {i + 1}")
+
+    if checkpoint_path:
+        save_checkpoint(checkpoint_path, num_merges_needed, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
+        print("Final checkpoint saved")
 
     return vocab, merges
 
@@ -246,7 +306,9 @@ if __name__ == "__main__":
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
                 input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
                 vocab_size=32_000,
-                special_tokens=["<|endoftext|>"])
+                special_tokens=["<|endoftext|>"],
+                checkpoint_path="./out/owt_train_bpe_checkpoint.pkl",
+                checkpoint_frequency=1000)
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
                 try:
