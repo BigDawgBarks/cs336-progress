@@ -175,7 +175,7 @@ def load_checkpoint(checkpoint_path):
     )
 
 
-def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], checkpoint_path: str = None, checkpoint_frequency: int = 1000) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], checkpoint_path: str = None, checkpoint_frequency: int = 2000) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
     if vocab_size < 256:
@@ -258,7 +258,8 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], check
                 print("Done building initial pair statistics.")
                 merges = []
 
-    num_merges_needed = vocab_size - len(vocab)
+    initial_vocab_size = 256 + len(special_tokens)
+    num_merges_needed = vocab_size - initial_vocab_size
     
     for i in tqdm(range(start_merge_index, num_merges_needed), desc="Merges", total=num_merges_needed, initial=start_merge_index):
         if not pair_stats:
