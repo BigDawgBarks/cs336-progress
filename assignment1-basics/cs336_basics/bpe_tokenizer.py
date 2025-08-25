@@ -145,8 +145,6 @@ def save_checkpoint(checkpoint_path, merge_index, vocab, merges, word_freqs_symb
         'vocab': vocab,
         'merges': merges,
         'word_freqs_symbols': word_freqs_symbols,
-        'pair_stats': pair_stats,
-        'pair_to_symbols_mapping': pair_to_symbols_mapping
     }
     
     with tempfile.NamedTemporaryFile(mode='wb', delete=False, dir=os.path.dirname(checkpoint_path)) as tmp_file:
@@ -158,20 +156,37 @@ def save_checkpoint(checkpoint_path, merge_index, vocab, merges, word_freqs_symb
     os.rename(temp_path, checkpoint_path)
 
 
-def load_checkpoint(checkpoint_path):
+def load_checkpoint(checkpoint_path, pool=None):
     if not os.path.exists(checkpoint_path):
         return None
     
     with open(checkpoint_path, 'rb') as f:
         checkpoint_data = pickle.load(f)
     
+    merge_index = checkpoint_data['merge_index']
+    vocab = checkpoint_data['vocab']
+    merges = checkpoint_data['merges']
+    word_freqs_symbols = checkpoint_data['word_freqs_symbols']
+    
+    # Check if this is an old checkpoint with pair_stats and pair_to_symbols_mapping
+    if 'pair_stats' in checkpoint_data and 'pair_to_symbols_mapping' in checkpoint_data:
+        # Backwards compatibility: use saved values
+        pair_stats = checkpoint_data['pair_stats']
+        pair_to_symbols_mapping = checkpoint_data['pair_to_symbols_mapping']
+    else:
+        # New format: rebuild from word_freqs_symbols
+        print("Rebuilding pair statistics from checkpoint data...")
+        pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
+        pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)
+        print("Done rebuilding pair statistics.")
+    
     return (
-        checkpoint_data['merge_index'],
-        checkpoint_data['vocab'],
-        checkpoint_data['merges'],
-        checkpoint_data['word_freqs_symbols'],
-        checkpoint_data['pair_stats'],
-        checkpoint_data['pair_to_symbols_mapping']
+        merge_index,
+        vocab,
+        merges,
+        word_freqs_symbols,
+        pair_stats,
+        pair_to_symbols_mapping
     )
 
 
@@ -181,31 +196,31 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], check
     if vocab_size < 256:
         raise ValueError("Vocabulary size must be at least 256.")
 
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        print(f"Loading checkpoint from {checkpoint_path}")
-        checkpoint_data = load_checkpoint(checkpoint_path)
-        if checkpoint_data:
-            start_merge_index, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping = checkpoint_data
-            print(f"Resuming from merge {start_merge_index}")
+    with mp.Pool(processes=get_num_workers()) as pool:
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            print(f"Loading checkpoint from {checkpoint_path}")
+            checkpoint_data = load_checkpoint(checkpoint_path, pool=pool)
+            if checkpoint_data:
+                start_merge_index, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping = checkpoint_data
+                print(f"Resuming from merge {start_merge_index}")
+            else:
+                start_merge_index = 0
+                vocab = {i: bytes([i]) for i in range(256)}
+                for token_str in special_tokens:
+                    if token_str.encode("utf-8") not in vocab.values():
+                        vocab[len(vocab)] = token_str.encode("utf-8")
         else:
             start_merge_index = 0
             vocab = {i: bytes([i]) for i in range(256)}
             for token_str in special_tokens:
                 if token_str.encode("utf-8") not in vocab.values():
                     vocab[len(vocab)] = token_str.encode("utf-8")
-    else:
-        start_merge_index = 0
-        vocab = {i: bytes([i]) for i in range(256)}
-        for token_str in special_tokens:
-            if token_str.encode("utf-8") not in vocab.values():
-                vocab[len(vocab)] = token_str.encode("utf-8")
 
-    if start_merge_index == 0:
-        bytes_processed = 0
-        total_word_freqs_str = Counter()
-        total_file_size = get_file_size(input_path)
-        with tqdm(total=total_file_size, desc="Read", unit="B", unit_scale=True) as pbar:
-            with mp.Pool(processes=get_num_workers()) as pool:
+        if start_merge_index == 0:
+            bytes_processed = 0
+            total_word_freqs_str = Counter()
+            total_file_size = get_file_size(input_path)
+            with tqdm(total=total_file_size, desc="Read", unit="B", unit_scale=True) as pbar:
                 while True:
                     with open(input_path, "r", encoding="utf-8") as f:
                         f.seek(bytes_processed)
@@ -250,38 +265,38 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], check
                         for freqs in chunk_freqs_list:
                             total_word_freqs_str.update(freqs)
 
-                print("Building initial pair statistics...")
-                word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
-                word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
-                pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
-                pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)        
-                print("Done building initial pair statistics.")
-                merges = []
+            print("Building initial pair statistics...")
+            word_freqs_bytes = {word.encode("utf-8"): freq for word, freq in total_word_freqs_str.items()}
+            word_freqs_symbols = {tuple(bytes([b]) for b in word): freq for word, freq in word_freqs_bytes.items()}
+            pair_stats = get_pair_stats(word_freqs_symbols, pool=pool)
+            pair_to_symbols_mapping = build_pair_to_symbols_mapping(word_freqs_symbols)        
+            print("Done building initial pair statistics.")
+            merges = []
 
-    initial_vocab_size = 256 + len(special_tokens)
-    num_merges_needed = vocab_size - initial_vocab_size
-    
-    for i in tqdm(range(start_merge_index, num_merges_needed), desc="Merges", total=num_merges_needed, initial=start_merge_index):
-        if not pair_stats:
-            break
-
-        best_pair = max(pair_stats, key=lambda p: (pair_stats[p], p))
+        initial_vocab_size = 256 + len(special_tokens)
+        num_merges_needed = vocab_size - initial_vocab_size
         
-        merges.append(best_pair)
-        new_token_id = len(vocab)
-        vocab[new_token_id] = best_pair[0] + best_pair[1]
+        for i in tqdm(range(start_merge_index, num_merges_needed), desc="Merges", total=num_merges_needed, initial=start_merge_index):
+            if not pair_stats:
+                break
 
-        merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping, pair_stats)
-        
-        if checkpoint_path and (i + 1) % checkpoint_frequency == 0:
-            save_checkpoint(checkpoint_path, i + 1, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
-            print(f"Checkpoint saved at merge {i + 1}")
+            best_pair = max(pair_stats, key=lambda p: (pair_stats[p], p))
+            
+            merges.append(best_pair)
+            new_token_id = len(vocab)
+            vocab[new_token_id] = best_pair[0] + best_pair[1]
 
-    if checkpoint_path:
-        save_checkpoint(checkpoint_path, num_merges_needed, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
-        print("Final checkpoint saved")
+            merge_symbols(best_pair, word_freqs_symbols, pair_to_symbols_mapping, pair_stats)
+            
+            if checkpoint_path and (i + 1) % checkpoint_frequency == 0:
+                save_checkpoint(checkpoint_path, i + 1, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
+                print(f"Checkpoint saved at merge {i + 1}")
 
-    return vocab, merges
+        if checkpoint_path:
+            save_checkpoint(checkpoint_path, num_merges_needed, vocab, merges, word_freqs_symbols, pair_stats, pair_to_symbols_mapping)
+            print("Final checkpoint saved")
+
+        return vocab, merges
 
 
 def _process_file_chunk_batch(args) -> Counter:
