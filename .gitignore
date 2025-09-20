@@ -161,3 +161,6 @@ cython_debug/
 
 .ruff_cache/
 *.zip
+*.pkl
+*.pkl.bak
+assignment1-basics/out/tmp*
