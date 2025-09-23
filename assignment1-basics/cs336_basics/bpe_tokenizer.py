@@ -13,6 +13,7 @@ import re
 import regex
 import heapq
 import tempfile
+import base64
 
 
 PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -319,20 +320,20 @@ if __name__ == "__main__":
     with profile_block("foo"):
         vocab, merges = train_bpe(
                 # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt",
-                # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
-                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
-                vocab_size=32_000,
+                input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
+                # input_path="/home/rylnaldo/Code/cs336/assignment1-basics/data/owt_train.txt",
+                vocab_size=10_000,
                 special_tokens=["<|endoftext|>"],
-                checkpoint_path="./out/owt_train_bpe_checkpoint.pkl",
+                # checkpoint_path="./out/owt_train_bpe_checkpoint.pkl",
+                # checkpoint_path="./out/TinyStories_bpe_checkpoint.pkl",
                 checkpoint_frequency=1000)
         with open('./out/vocab.txt', 'w') as f:
             for token in vocab:
-                try:
-                    decoded = vocab[token].decode('utf-8')
-                except UnicodeDecodeError:
-                    decoded = repr(vocab[token])
-                f.write(f"{token}: {decoded}\n")
+                encoded = base64.b64encode(vocab[token]).decode('ascii')
+                f.write(f"{token}: {encoded}\n")
         with open('./out/merges.txt', 'w') as f:
             for m1, m2 in merges:
-                f.write(f"Merge {m1}, {m2}\n")
+                m1_encoded = base64.b64encode(m1).decode('ascii')
+                m2_encoded = base64.b64encode(m2).decode('ascii')
+                f.write(f"Merge {m1_encoded}, {m2_encoded}\n")
 
