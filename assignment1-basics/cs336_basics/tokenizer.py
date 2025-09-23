@@ -67,20 +67,135 @@ class Tokenizer:
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         """Returns generator lazily yielding token IDs, memory efficient."""
         PRETOKENIZATION_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-        CHUNK_SIZE = 100_000_000
+        CHUNK_SIZE = 1_000_000
 
-        
-        # loop:
-        #   read chunk
-        #   pretokenize chunk
+        compiled_pattern = regex.compile(PRETOKENIZATION_PATTERN)
+        accumulated_text = ""
+        prefix = ""  # Prefix from previous chunk
 
-        # end loop
+        bytes_to_token_id = {v: k for k, v in self.vocab.items()}
 
-        yield from ()
+        # Persistent mapping of pretoken/special_token -> token_ids for efficiency
+        token_cache = {}
+        for text_chunk in iterable:
+            accumulated_text += text_chunk
+
+            while len(accumulated_text) >= CHUNK_SIZE:
+                chunk_text = prefix + accumulated_text[:CHUNK_SIZE]
+                accumulated_text = accumulated_text[CHUNK_SIZE:]
+
+                # First pass: split on special tokens
+                if self.special_tokens:
+                    special_pattern = f"({'|'.join(regex.escape(token) for token in self.special_tokens)})"
+                    parts = regex.split(special_pattern, chunk_text)
+                    parts = [part for part in parts if part]  # Remove empty parts
+                else:
+                    parts = [chunk_text]
+
+                # Second pass: pretokenize non-special parts
+                processed_parts = []
+                for part in parts:
+                    if part in self.special_tokens:
+                        processed_parts.append(part)
+                    else:
+                        pretokens = [match.group(0) for match in compiled_pattern.finditer(part)]
+                        processed_parts.extend(pretokens)
+
+                if processed_parts:
+                    prefix = processed_parts.pop()
+                else:
+                    prefix = ""
+
+                for token in processed_parts:
+                    if token not in token_cache:
+                        if token in self.special_tokens:
+                            token_bytes = token.encode('utf-8')
+                            if token_bytes in bytes_to_token_id:
+                                token_cache[token] = [bytes_to_token_id[token_bytes]]
+                            else:
+                                token_cache[token] = []
+                        else:
+                            token_cache[token] = self._apply_bpe_to_token(token, bytes_to_token_id)
+
+                for token in processed_parts:
+                    yield from token_cache[token]
+
+        if accumulated_text or prefix:
+            final_text = prefix + accumulated_text
+
+            if self.special_tokens:
+                special_pattern = f"({'|'.join(regex.escape(token) for token in self.special_tokens)})"
+                parts = regex.split(special_pattern, final_text)
+                parts = [part for part in parts if part]  # Remove empty parts
+            else:
+                parts = [final_text]
+
+            processed_parts = []
+            for part in parts:
+                if part in self.special_tokens:
+                    processed_parts.append(part)
+                else:
+                    pretokens = [match.group(0) for match in compiled_pattern.finditer(part)]
+                    processed_parts.extend(pretokens)
+
+            for token in processed_parts:
+                if token not in token_cache:
+                    if token in self.special_tokens:
+                        token_bytes = token.encode('utf-8')
+                        if token_bytes in bytes_to_token_id:
+                            token_cache[token] = [bytes_to_token_id[token_bytes]]
+                        else:
+                            token_cache[token] = []
+                    else:
+                        token_cache[token] = self._apply_bpe_to_token(token, bytes_to_token_id)
+
+            for token in processed_parts:
+                yield from token_cache[token]
+
+    def _apply_bpe_to_token(self, token: str, bytes_to_token_id: dict) -> list[int]:
+        """Apply BPE merges to a single token and return list of token IDs."""
+        token_bytes = token.encode('utf-8')
+        symbols = [bytes([b]) for b in token_bytes]
+
+        for merge_pair in self.merges:
+            new_symbols = []
+            i = 0
+            while i < len(symbols):
+                if (i < len(symbols) - 1 and
+                    symbols[i] == merge_pair[0] and
+                    symbols[i + 1] == merge_pair[1]):
+                    merged = merge_pair[0] + merge_pair[1]
+                    new_symbols.append(merged)
+                    i += 2
+                else:
+                    new_symbols.append(symbols[i])
+                    i += 1
+            symbols = new_symbols
+
+        token_ids = []
+        for symbol in symbols:
+            if symbol in bytes_to_token_id:
+                token_ids.append(bytes_to_token_id[symbol])
+            else:
+                # Fallback to individual bytes if symbol not found
+                for b in symbol:
+                    token_ids.append(bytes_to_token_id.get(bytes([b]), 0))
+
+        return token_ids
 
     def decode(self, ids: list[int]) -> str:
         """Decode token ids into text."""
-        return b''.join([self.vocab[id_] for id_ in ids]).decode('utf-8')
+        byte_sequence = b''.join([self.vocab[id_] for id_ in ids])
+        try:
+            return byte_sequence.decode('utf-8')
+        except UnicodeDecodeError:
+            if len(ids) == 1:
+                return ""
+            else:
+                # For multiple tokens, this shouldn't happen in normal cases
+                # Re-raise the original error
+                raise
 
 if __name__ == "__main__":
     pass
+
