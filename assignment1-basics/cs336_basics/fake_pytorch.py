@@ -23,3 +23,19 @@ class Embedding(torch.nn.Module):
     
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.embeddings[token_ids]
+
+class RMSNorm(torch.nn.Module):
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+        super().__init__()
+        self.eps = eps
+        self.d_model = d_model
+        self.scale = torch.nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+
+        rms = torch.sqrt(einsum(x, x, "... d_model, ... d_model -> ...") / self.d_model + self.eps)
+        result = einsum(x, 1/rms, self.scale, "... d_model, ..., d_model -> ... d_model")
+
+        return result.to(in_dtype)
