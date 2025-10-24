@@ -4,15 +4,22 @@ import torch
 from einops import rearrange, einsum
 import math
 
+def init_linear_weights(in_features, out_features):
+    W = torch.nn.Parameter(torch.zeros([out_features, in_features]))
+    std_dev = math.sqrt(2 / (in_features + out_features))
+    torch.nn.init.trunc_normal_(W, mean=0.0, std=std_dev, a=-3.0*std_dev, b=3.0*std_dev)
+    return W
+
+def batched_matmul(W, x):
+    return einsum(W, x, "d_out d_in, ... d_in -> ... d_out")
+
 class Linear(torch.nn.Module):
     def __init__(self, in_features: int, out_features: int, device=None, dtype=None):
         super().__init__()
-        self.W = torch.nn.Parameter(torch.zeros([out_features, in_features]))
-        std_dev = math.sqrt(2 / (in_features + out_features))
-        torch.nn.init.trunc_normal_(self.W, mean=0.0, std=std_dev, a=-3.0*std_dev, b=3.0*std_dev)
+        self.W = init_linear_weights(in_features=in_features, out_features=out_features)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return einsum(self.W, x, "d_out d_in, ... d_in -> ... d_out")
+        return batched_matmul(self.W, x)
         
 
 class Embedding(torch.nn.Module):
@@ -39,3 +46,15 @@ class RMSNorm(torch.nn.Module):
         result = einsum(x, 1/rms, self.scale, "... d_model, ..., d_model -> ... d_model")
 
         return result.to(in_dtype)
+
+class SwiGLU(torch.nn.Module):
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.W1 = init_linear_weights(in_features=d_model, out_features=d_ff)
+        self.W2 = init_linear_weights(in_features=d_ff, out_features=d_model)
+        self.W3 = init_linear_weights(in_features=d_model, out_features=d_ff)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        silu = lambda z : z * torch.sigmoid(z)
+        return batched_matmul(self.W2, silu(batched_matmul(self.W1, x)) * batched_matmul(self.W3, x))
+        return batched_matmul(self.W2, i1)
