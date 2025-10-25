@@ -58,3 +58,24 @@ class SwiGLU(torch.nn.Module):
         silu = lambda z : z * torch.sigmoid(z)
         return batched_matmul(self.W2, silu(batched_matmul(self.W1, x)) * batched_matmul(self.W3, x))
         return batched_matmul(self.W2, i1)
+    
+class RoPE(torch.nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        super().__init__()
+        
+        angle = lambda seq, dim : seq / (theta ** (dim / d_k))
+        
+        rotations = []
+        for i in range(max_seq_len):
+            rotations.append([])
+            for dim in range(0, d_k, 2):
+                angle_ = angle(i, dim)
+                rotations[-1].append([[math.cos(angle_), -1 * math.sin(angle_)], 
+                                    [math.sin(angle_), math.cos(angle_)]])
+        self.register_buffer('rotations_by_position', torch.Tensor(rotations))
+    
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor):
+        rotation_matrix = []
+        for position in self.rotations_by_position[token_positions]:
+            rotation_matrix.append(torch.block_diag(*position))
+        return einsum(x, torch.stack(rotation_matrix), "... seq inner_dim, seq outer_dim inner_dim -> ... seq outer_dim")

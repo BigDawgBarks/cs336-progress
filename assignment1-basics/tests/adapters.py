@@ -11,7 +11,7 @@ from torch import Tensor
 
 from cs336_basics.bpe_tokenizer import train_bpe
 from cs336_basics.tokenizer import Tokenizer
-from cs336_basics.fake_pytorch import Linear, Embedding, RMSNorm, SwiGLU
+from cs336_basics.fake_pytorch import Linear, Embedding, RMSNorm, SwiGLU, RoPE
 
 
 def run_linear(
@@ -211,7 +211,7 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    return RoPE(theta=theta, d_k=d_k, max_seq_len=max_seq_len).forward(x=in_query_or_key, token_positions=token_positions)
 
 
 def run_transformer_block(
