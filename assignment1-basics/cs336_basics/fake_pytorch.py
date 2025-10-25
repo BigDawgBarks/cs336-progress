@@ -79,3 +79,11 @@ class RoPE(torch.nn.Module):
         for position in self.rotations_by_position[token_positions]:
             rotation_matrix.append(torch.block_diag(*position))
         return einsum(x, torch.stack(rotation_matrix), "... seq inner_dim, seq outer_dim inner_dim -> ... seq outer_dim")
+
+def softmax(x: torch.Tensor, dim: int):
+    """Apply softmax to ith dimension of tensor x."""
+    result = x.clone()
+    result -= torch.max(result, dim=dim, keepdim=True).values
+    result = torch.exp(result) / torch.sum(torch.exp(result), dim=dim, keepdim=True)
+    return result
+    
