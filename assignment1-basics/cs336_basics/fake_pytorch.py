@@ -2,6 +2,7 @@
 
 import torch
 from einops import rearrange, einsum
+from jaxtyping import Float
 import math
 
 def init_linear_weights(in_features, out_features):
@@ -87,3 +88,13 @@ def softmax(x: torch.Tensor, dim: int):
     result = torch.exp(result) / torch.sum(torch.exp(result), dim=dim, keepdim=True)
     return result
     
+def scaled_dot_product_attention(
+    Q: Float[torch.Tensor, " ... queries d_k"],
+    K: Float[torch.Tensor, " ... keys d_k"],
+    V: Float[torch.Tensor, " ... values d_v"],
+    mask: Float[torch.Tensor, " ... queries keys"] | None = None,
+    ) -> Float[torch.Tensor, " ... queries d_v"]:
+    d_k = Q.shape[-1]
+    qtk = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")
+    masked_qtk = qtk.masked_fill(~mask, -float('inf')) if mask is not None else qtk
+    return einsum(softmax(masked_qtk / math.sqrt(d_k), dim=-1), V, "... queries keys, ... keys d_v -> ... queries d_v")
