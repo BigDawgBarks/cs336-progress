@@ -63,23 +63,28 @@ class SwiGLU(torch.nn.Module):
 class RoPE(torch.nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         super().__init__()
-        
-        angle = lambda seq, dim : seq / (theta ** (dim / d_k))
-        
+
+        angle = lambda seq, dim: seq / (theta ** (dim / d_k))
+
         rotations = []
-        for i in range(max_seq_len):
-            rotations.append([])
+        for position_idx in range(max_seq_len):
+            rotation_blocks = []
             for dim in range(0, d_k, 2):
-                angle_ = angle(i, dim)
-                rotations[-1].append([[math.cos(angle_), -1 * math.sin(angle_)], 
-                                    [math.sin(angle_), math.cos(angle_)]])
-        self.register_buffer('rotations_by_position', torch.Tensor(rotations))
-    
+                angle_ = angle(position_idx, dim)
+                block = torch.tensor([
+                    [math.cos(angle_), -math.sin(angle_)],
+                    [math.sin(angle_), math.cos(angle_)]
+                ])
+                rotation_blocks.append(block)
+
+            full_rotation_matrix = torch.block_diag(*rotation_blocks)
+            rotations.append(full_rotation_matrix)
+
+        self.register_buffer('rotations_by_position', torch.stack(rotations))
+
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor):
-        rotation_matrix = []
-        for position in self.rotations_by_position[token_positions]:
-            rotation_matrix.append(torch.block_diag(*position))
-        return einsum(x, torch.stack(rotation_matrix), "... seq inner_dim, seq outer_dim inner_dim -> ... seq outer_dim")
+        rotation_matrices = self.rotations_by_position[token_positions]
+        return einsum(x, rotation_matrices, "... seq d_k_in, ... seq d_k_out d_k_in -> ... seq d_k_out")
 
 def softmax(x: torch.Tensor, dim: int):
     """Apply softmax to ith dimension of tensor x."""
@@ -98,3 +103,30 @@ def scaled_dot_product_attention(
     qtk = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")
     masked_qtk = qtk.masked_fill(~mask, -float('inf')) if mask is not None else qtk
     return einsum(softmax(masked_qtk / math.sqrt(d_k), dim=-1), V, "... queries keys, ... keys d_v -> ... queries d_v")
+
+class MHA(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int):
+        super().__init__()
+        self.W_q = init_linear_weights(in_features=d_model, out_features=d_model)
+        self.W_k = init_linear_weights(in_features=d_model, out_features=d_model)
+        self.W_v = init_linear_weights(in_features=d_model, out_features=d_model)
+        self.W_o = init_linear_weights(in_features=d_model, out_features=d_model)
+        self.d_k = d_model // num_heads
+        self.num_heads = num_heads
+    
+    def forward(self, x: Float[torch.Tensor, "... seq d_in"], rope = None) -> Float[torch.Tensor, " ... sequence_length d_out"]:
+        Q = rearrange(batched_matmul(self.W_q, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
+        K = rearrange(batched_matmul(self.W_k, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
+        V = rearrange(batched_matmul(self.W_v, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
+        
+        if rope:
+            Q = rope(Q)
+            K = rope(K)
+
+        heads = scaled_dot_product_attention(Q=Q, K=K, V=V, mask=torch.tril(torch.ones(Q.shape[-2], K.shape[-2])) == 1)
+        heads = rearrange(heads, "... h seq d_v -> ... seq (h d_v)")
+        return batched_matmul(self.W_o, heads)
+        
+        
+                
+
