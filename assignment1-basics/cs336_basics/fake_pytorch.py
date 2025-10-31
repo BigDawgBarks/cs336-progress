@@ -105,7 +105,7 @@ def scaled_dot_product_attention(
     return einsum(softmax(masked_qtk / math.sqrt(d_k), dim=-1), V, "... queries keys, ... keys d_v -> ... queries d_v")
 
 class MHA(torch.nn.Module):
-    def __init__(self, d_model: int, num_heads: int):
+    def __init__(self, d_model: int, num_heads: int, rope = None):
         super().__init__()
         self.W_q = init_linear_weights(in_features=d_model, out_features=d_model)
         self.W_k = init_linear_weights(in_features=d_model, out_features=d_model)
@@ -113,20 +113,53 @@ class MHA(torch.nn.Module):
         self.W_o = init_linear_weights(in_features=d_model, out_features=d_model)
         self.d_k = d_model // num_heads
         self.num_heads = num_heads
+        self.rope = rope
     
-    def forward(self, x: Float[torch.Tensor, "... seq d_in"], rope = None) -> Float[torch.Tensor, " ... sequence_length d_out"]:
+    def forward(self, x: Float[torch.Tensor, "... seq d_in"]) -> Float[torch.Tensor, " ... sequence_length d_out"]:
         Q = rearrange(batched_matmul(self.W_q, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
         K = rearrange(batched_matmul(self.W_k, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
         V = rearrange(batched_matmul(self.W_v, x), "... seq (h d_k) -> ... h seq d_k", h=self.num_heads)
         
-        if rope:
-            Q = rope(Q)
-            K = rope(K)
+        if self.rope:
+            Q = self.rope(Q)
+            K = self.rope(K)
 
         heads = scaled_dot_product_attention(Q=Q, K=K, V=V, mask=torch.tril(torch.ones(Q.shape[-2], K.shape[-2])) == 1)
         heads = rearrange(heads, "... h seq d_v -> ... seq (h d_v)")
         return batched_matmul(self.W_o, heads)
         
+class TransformerBlock(torch.nn.Module):
+    def __init__(self, d_model, num_heads, d_ff, max_seq_len, theta):
+        super().__init__()
+        rope = lambda x : RoPE(theta=theta, d_k=d_model//num_heads, 
+            max_seq_len=max_seq_len).forward(x, token_positions=torch.arange(x.shape[-2], device=x.device))
+        self.rmsnorm1 = RMSNorm(d_model=d_model)
+        self.mha = MHA(d_model=d_model, num_heads=num_heads, rope=rope)
+        self.rmsnorm2 = RMSNorm(d_model=d_model)
+        self.ffn = SwiGLU(d_model=d_model, d_ff=d_ff)
         
-                
+    def forward(self, x):
+        after_norm1 = self.rmsnorm1.forward(x)
+        after_mha = x + self.mha.forward(after_norm1)
+        after_norm2 = self.rmsnorm2.forward(after_mha)
+        after_ffn = after_mha + self.ffn.forward(after_norm2)
+        return after_ffn
+        
+class TransformerLM(torch.nn.Module):
+    def __init__(self, vocab_size, context_length, num_layers, d_model, num_heads, d_ff, theta):
+        super().__init__()
+        self.embedding = Embedding(num_embeddings=vocab_size, embedding_dim=d_model)        
+        self.transformer_blocks = torch.nn.ModuleList()
+        for i in range(num_layers):
+            self.transformer_blocks.append(TransformerBlock(d_model, num_heads, d_ff, context_length, theta))
+        self.rmsnorm = RMSNorm(d_model)
+        self.linear = Linear(in_features=d_model, out_features=vocab_size)
+    
+    def forward(self, x):
+        embeddings = self.embedding.forward(x)
+        for block in self.transformer_blocks:
+            embeddings = block.forward(embeddings)
+        return self.linear.forward(self.rmsnorm.forward(embeddings))
+        
+        
 

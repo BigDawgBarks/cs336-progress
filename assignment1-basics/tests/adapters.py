@@ -11,7 +11,8 @@ from torch import Tensor
 
 from cs336_basics.bpe_tokenizer import train_bpe
 from cs336_basics.tokenizer import Tokenizer
-from cs336_basics.fake_pytorch import Linear, Embedding, RMSNorm, SwiGLU, RoPE, softmax, scaled_dot_product_attention, MHA
+from cs336_basics.fake_pytorch import (Linear, Embedding, RMSNorm, SwiGLU, RoPE,
+        softmax, scaled_dot_product_attention, MHA, TransformerBlock, TransformerLM)
 
 
 def run_linear(
@@ -192,9 +193,9 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     rope = lambda x : RoPE(theta=theta, d_k=d_model//num_heads, max_seq_len=max_seq_len).forward(x, token_positions=token_positions)
-    mha = MHA(d_model=d_model, num_heads=num_heads)
+    mha = MHA(d_model=d_model, num_heads=num_heads, rope=rope)
     mha.load_state_dict({"W_q": q_proj_weight, "W_k": k_proj_weight, "W_v": v_proj_weight, "W_o": o_proj_weight})
-    return mha.forward(x=in_features, rope=rope)
+    return mha.forward(x=in_features)
 
 
 def run_rope(
@@ -289,7 +290,21 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    block = TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff,
+            max_seq_len=max_seq_len, theta=theta)
+    block.load_state_dict({
+        "mha.W_q": weights["attn.q_proj.weight"],
+        "mha.W_k": weights["attn.k_proj.weight"],
+        "mha.W_v": weights["attn.v_proj.weight"],
+        "mha.W_o": weights["attn.output_proj.weight"],
+        "ffn.W1": weights["ffn.w1.weight"],
+        "ffn.W2": weights["ffn.w2.weight"],
+        "ffn.W3": weights["ffn.w3.weight"],
+        "rmsnorm1.scale": weights["ln1.weight"],
+        "rmsnorm2.scale": weights["ln2.weight"],
+    })
+    return block.forward(in_features)
+    
 
 
 def run_transformer_lm(
@@ -371,7 +386,29 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    llm = TransformerLM(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, rope_theta)
+
+    state_dict = {
+        "embedding.embeddings": weights["token_embeddings.weight"],
+        "rmsnorm.scale": weights["ln_final.weight"],
+        "linear.W": weights["lm_head.weight"],
+    }
+
+    for i in range(num_layers):
+        state_dict.update({
+            f"transformer_blocks.{i}.mha.W_q": weights[f"layers.{i}.attn.q_proj.weight"],
+            f"transformer_blocks.{i}.mha.W_k": weights[f"layers.{i}.attn.k_proj.weight"],
+            f"transformer_blocks.{i}.mha.W_v": weights[f"layers.{i}.attn.v_proj.weight"],
+            f"transformer_blocks.{i}.mha.W_o": weights[f"layers.{i}.attn.output_proj.weight"],
+            f"transformer_blocks.{i}.rmsnorm1.scale": weights[f"layers.{i}.ln1.weight"],
+            f"transformer_blocks.{i}.rmsnorm2.scale": weights[f"layers.{i}.ln2.weight"],
+            f"transformer_blocks.{i}.ffn.W1": weights[f"layers.{i}.ffn.w1.weight"],
+            f"transformer_blocks.{i}.ffn.W2": weights[f"layers.{i}.ffn.w2.weight"],
+            f"transformer_blocks.{i}.ffn.W3": weights[f"layers.{i}.ffn.w3.weight"],
+        })
+
+    llm.load_state_dict(state_dict)
+    return llm.forward(in_indices)
 
 
 def run_rmsnorm(
